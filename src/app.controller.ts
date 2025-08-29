@@ -11,6 +11,7 @@ config({
 });
 
 import authController from "./modules/auth/auth.controller";
+import userController from "./modules/user/user.controller";
 import { globalErrorHandling } from "./utils/response/error.response";
 import connectDB from "./db/connection.db";
 
@@ -35,6 +36,7 @@ const bootstrap = async (): Promise<void> => {
 
     //modules
     app.use("/auth",authController);
+    app.use("/user",userController);
 
     app.use("{/*dummy}",(req:Request,res:Response)=>{
         return res.status(404).json({message:"Invalid Routing"});

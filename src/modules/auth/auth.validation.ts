@@ -8,7 +8,6 @@ export const login = {
     })
 }
 
-
 export const signup = {
     body: login.body.extend({
         username: generalFields.username,
@@ -41,4 +40,31 @@ export const resendConfirmEmail = {
     body: z.strictObject({
         email: generalFields.email,
     })
+}
+
+export const signupWithGmail = {
+    body: z.strictObject({
+        idToken: z.string(),
+    })
+} 
+
+export const sendForgotPasswordCode = {
+    body: z.strictObject({
+        email: generalFields.email,
+    })
+}
+
+export const verifyForgotPassword = {
+    body: sendForgotPasswordCode.body.extend({
+        otp: generalFields.otp,
+    })
+}
+
+export const resetForgotPassword = {
+    body: verifyForgotPassword.body.extend({
+        password: generalFields.password,
+        confirmPassword: generalFields.confirmPassword
+    }).refine((data)=>{
+        return data.password === data.confirmPassword;
+    },{message:"Password mistmatch confirmPassword",path:["confirmPassword"]})
 }

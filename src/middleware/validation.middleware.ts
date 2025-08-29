@@ -50,5 +50,5 @@ export const generalFields = {
     email: z.email(),
     password: z.string(),
     confirmPassword: z.string(),
-    otp: z.string().length(6)
+    otp: z.string().regex(/^\d{6}$/)
 }

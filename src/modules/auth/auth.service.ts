@@ -1,89 +1,169 @@
 import type { Request, Response } from "express";
-import * as DBService from "../../db/service/db.service";
-import { UserModel } from "../../db/models/User.model";
-import { ApplicationException, NotFoundException } from "../../utils/response/error.response";
+import { ProviderEnum, UserModel } from "../../db/models/User.model";
+import { ApplicationException, BadRequestException, ConflictException, NotFoundException } from "../../utils/response/error.response";
 import { compareHash, generateHash } from "../../utils/security/hash.security";
-import nanoid from "nanoid";
-import { emailEvent } from "../../utils/events/email.events";
-import { generateEncryption } from "../../utils/security/encryption.security";
-import { generateLoginCredentials } from "../../utils/security/token.security";
+import { emailEvent } from "../../utils/event/email.events";
+import { createLoginCredentials } from "../../utils/security/token.security";
+import { IConfirmEmailBodyInputsDTO, IForgotCodeBodyInputsDTO, IGmail, ILoginBodyInputsDTO, IResetForgotCodeBodyInputsDTO, ISignUpBodyInputsDTO, IVerifyForgotCodeBodyInputsDTO } from "./auth.dto";
+import { UserRepository } from "../../db/repository/user.repository";
+import { generateNumberOtp } from "../../utils/otp";
+import {OAuth2Client, TokenPayload} from "google-auth-library";
 
 class AuthenticationService
 {
-    constructor()
-    {
-        
-    }
+    private userModel = new UserRepository(UserModel);
+
+    constructor() {}
 
     signup = async (req: Request,res: Response): Promise<Response> =>
     {
-        const {username,email,password,phone} = req.body;
+        const {username,email,password}: ISignUpBodyInputsDTO = req.body;
 
-        if(await DBService.findOne({model:UserModel,filter:{email}}))
+        const checkUserExist = await this.userModel.findOne({
+            filter: {email},
+            select: "email",
+            options: {
+                lean: true
+            }
+        });
+
+        if(checkUserExist)
         {
-            throw new ApplicationException("Email Exists",409);
+            throw new ConflictException("User already exists");
         }
 
-        const hashPassword = await generateHash({plaintext:password});
-        const encPhone = await generateEncryption({plaintext:phone});
+        const otp = generateNumberOtp();
 
-        const otp = nanoid.customAlphabet("0123456789",6)();
-        const confirmEmailOtp = {
-            otp: await generateHash({plaintext:otp}),
-            attempts: 0,
-            retryDate: null,
-            expirationDate: Date.now() + 2*60*1000
-        }
-
-
-        const user = await DBService.create({
-            model: UserModel,
-            data: [{username,email,password:hashPassword,phone:encPhone,confirmEmailOtp}]
+        const user = await this.userModel.createUser({
+            data: [{
+                username,
+                email,
+                password: await generateHash(password),
+                confirmEmailOtp: await generateHash(String(otp))
+            }]
         });
 
         emailEvent.emit("confirmEmail",{
             to: email,
             otp
-        });
+        })
 
-        return res.status(201).json({message:"Done",data:{user}});
+        return res.status(201).json({message: "Done",data: {user}});
     };
 
     login = async (req: Request,res: Response): Promise<Response> =>
     {
-        const {email,password} = req.body;
+        const { email, password}: ILoginBodyInputsDTO = req.body;
     
-        const user = await DBService.findOne({
-            model:UserModel,
-            filter:{ email }
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system
+            }
         });
 
         if(!user)
         {
             throw new NotFoundException("Invalid Login data");
         }
-        if(!user.confirmEmail)
+
+        if(!user.confirmedAt)
         {
-            throw new ApplicationException("Please verify your account first");
+            throw new BadRequestException("Please verify your account first");
         }
         
-        if(!await compareHash({plaintext:password,hashValue:user.password}))
+        if(!await compareHash(password,user.password))
         {
             throw new NotFoundException("Invalid Login data");
         }
 
-        const credentials = await generateLoginCredentials({user});
+        const credentials = await createLoginCredentials(user);
 
         return res.json({message:"Done",data:{credentials}});
     };
 
+    private async verifyGmailAccount(idToken: string): Promise<TokenPayload>
+    {
+        const client = new OAuth2Client();
+        
+        const ticket = await client.verifyIdToken({
+            idToken,
+            audience: (process.env.WEB_CLIENT_IDS as string).split(",") || [],  // Specify the WEB_CLIENT_ID of the app that accesses the backend
+        });
+        const payload = ticket.getPayload();
+
+        if(!payload?.email_verified)
+        {
+            throw new BadRequestException("Failed to verify this google account");
+        }
+
+        return payload;
+    }
+
+    loginWithGmail = async (req: Request, res: Response): Promise<Response> => {
+
+        const {idToken}: IGmail = req.body;
+        const {email}: Partial<TokenPayload> = await this.verifyGmailAccount(idToken);
+
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.google
+            },
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Not registered account or registered with another provider");
+        }
+
+        const credentials = await createLoginCredentials(user);
+
+        return res.status(201).json({message:"Done",data:{credentials}})
+    }
+
+    signupWithGmail = async (req: Request, res: Response): Promise<Response> => {
+
+        const {idToken}: IGmail = req.body;
+        const {email, family_name, given_name, picture}: Partial<TokenPayload> = await this.verifyGmailAccount(idToken);
+
+        const user = await this.userModel.findOne({
+            filter: {email},
+        });
+
+        if(user)
+        {
+            if(user.provider === ProviderEnum.google)
+            {
+                return await this.loginWithGmail(req, res);
+            }
+            throw new ConflictException(`Email exists with another provider: ${user.provider}`);
+        }
+
+        const [newUser] = await this.userModel.create({
+            data: [{
+                email: email as string,
+                firstName:given_name as string,
+                lastName: family_name as string,
+                profilePicture: picture as string,
+                confirmedAt: new Date(),
+                provider: ProviderEnum.google
+            }]
+        }) || [];
+
+        if(!newUser) throw new BadRequestException("Faile to signup with Gmail. Please try again later.");
+
+        const credentials = await createLoginCredentials(newUser);
+
+        return res.status(201).json({message:"Done",data:{credentials}})
+    }
+
 
     confirmEmail = async (req: Request, res: Response): Promise<Response> =>
     {
-        const {email,otp} = req.body;
+        const {email,otp}: IConfirmEmailBodyInputsDTO = req.body;
 
-        const user = await DBService.findOne({
-            model: UserModel,
+        const user = await this.userModel.findOne({
             filter: {
                 email,
                 confirmEmail: {
@@ -97,49 +177,18 @@ class AuthenticationService
 
         if(!user) throw new NotFoundException("Invalid account or already verified");
 
-        if(user.confirmEmailOtp.retryDate)
+
+        if(!await compareHash(otp,user.confirmEmailOtp as string))
         {
-            // if ban expired
-            if(user.confirmEmailOtp.retryDate <= Date.now())
-            {
-                await DBService.updateOne({
-                    model: UserModel,
-                    filter: {email},
-                    update: {
-                        $set: {"confirmEmailOtp.attempts":0,"confirmEmailOtp.retryDate":null}
-                    }
-                });
-            }
-            // if user is still banned from making requests
-            else
-            {
-                const minutesLeft = Math.ceil((user.confirmEmailOtp.retryDate - Date.now()) / 1000 / 60);
-                throw new ApplicationException(`Too many attempts. Please retry again after ${minutesLeft} minute${minutesLeft > 1 ? "s" : ""}.`);
-            }
+
+            throw new ConflictException("Invalid confirmation code");
         }
 
-        // if otp is invalid or expired
-        if(!await compareHash({plaintext:otp,hashValue:user.confirmEmailOtp.otp}) || user.confirmEmailOtp.expirationDate < Date.now())
-        {
-            await DBService.updateOne({
-                model: UserModel,
-                filter: {email},
-                update: {
-                    $inc: {"confirmEmailOtp.attempts":1},
-                    $set: {"confirmEmailOtp.retryDate": user.confirmEmailOtp.attempts === 4 ? Date.now()+5*60*1000 : null }
-                }
-            });
-
-            throw new ApplicationException("Invalid or Expired OTP");
-        }
-
-        const updatedUser = await DBService.updateOne({
-            model: UserModel,
+        const updatedUser = await this.userModel.updateOne({
             filter: {email},
             update: {
-                confirmEmail: Date.now(),
-                $unset: {confirmEmailOtp: true},
-                $inc: {__v: 1}
+                confirmedAt: new Date(),
+                $unset: {confirmEmailOtp: true}
             }
         });
 
@@ -150,15 +199,14 @@ class AuthenticationService
     };
 
 
-    resendEmail = async (req: Request,res: Response) => {
+    resendConfirmEmail = async (req: Request,res: Response) => {
 
         const {email} = req.body;
 
-        const user = await DBService.findOne({
-            model: UserModel,
+        const user = await this.userModel.findOne({
             filter: {
                 email,
-                confirmEmail: {
+                confirmedAt: {
                     $exists: false
                 },
                 confirmEmailOtp: {
@@ -169,21 +217,12 @@ class AuthenticationService
 
         if(!user) throw new NotFoundException("Invalid account or already verified");
 
-        const otp = nanoid.customAlphabet("0123456789",6)();
+        const otp = generateNumberOtp();
 
-        const confirmEmailOtpUpdate = {
-            otp: await generateHash({plaintext:otp}),
-            expirationDate: Date.now() + 2*60*1000
-        }
-
-        await DBService.updateOne({
-            model: UserModel,
+        await this.userModel.updateOne({
             filter: {email},
             update: {
-                $set: {
-                    "confirmEmailOtp.otp":confirmEmailOtpUpdate.otp,
-                    "confirmEmailOtp.expirationDate":confirmEmailOtpUpdate.expirationDate,
-                }
+                confirmEmailOtp: generateHash(String(otp))
             }
         });
 
@@ -196,7 +235,113 @@ class AuthenticationService
 
     };
 
+    sendForgotPasswordCode = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email }: IForgotCodeBodyInputsDTO = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        const otp = generateNumberOtp();
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                resetPasswordOtp: await generateHash(String(otp))
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to send reset code. Please try again later");
+        }
+
+        emailEvent.emit("sendResetPassword",{to:email,otp})
+
+        return res.json({message:"Done"});
+    };
+
+    verifyForgotPasswordCode = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, otp }: IVerifyForgotCodeBodyInputsDTO = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true},
+                resetPasswordOtp: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(otp, user.resetPasswordOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+
+
+        return res.json({message:"Done"});
+    };
+
+    resetForgotPassword = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, otp, password }: IResetForgotCodeBodyInputsDTO = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true},
+                resetPasswordOtp: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(otp, user.resetPasswordOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                $unset: {resetPasswordOtp: true},
+                changeCredentialsTime: new Date(),
+                password: await generateHash(password)
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to reset password");
+        }
+
+
+
+        return res.json({message:"Done"});
+    };
+
 
 }
 
-export default new AuthenticationService;
+export default new AuthenticationService();

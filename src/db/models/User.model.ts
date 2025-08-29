@@ -1,41 +1,86 @@
-import mongoose from "mongoose";
+import { model, models, Schema, HydratedDocument } from "mongoose";
 
-export const genderEnum = {male:"male",female:"female"};
-export const roleEnum = {user:"user",admin:"admin"};
-export const providerEnum = {system:"system",google:"google"}
+export enum GenderEnum {
+    male="male",
+    female="female"
+}
 
-const userSchema = new mongoose.Schema({
-    username: {
-        type: String,
-        required: true,
-        minLength: 2,
-        maxLength: [20,"firstName max length is 20 character. You have entered {VALUE}."]
-    },
-    email: {
-        type: String,
-        required: true,
-        unique: true
-    },
-    password: {
-        type: String,
-        required: function() {
-            return (this as any).provider === providerEnum.system;
-        }
-    },
-    confirmEmail: Date,
-    confirmEmailOtp: new mongoose.Schema({
-        otp: String,
-        expirationDate: Number,
-        attempts: Number,
-        retryDate: Number
-    }),
+export enum RoleEnum {
+    user="user",
+    admin="admin"
+}
+
+export enum ProviderEnum {
+    system="system",
+    google="google"
+}
+
+export interface IUser {
+
+    firstName: string;
+    lastName: string;
+    username?: string;
+
+    email: string;
+    confirmEmailOtp?: string;
+    confirmedAt: Date;
+
+    password: string;
+    resetPasswordOtp?: string;
+    changeCredentialsTime?: Date;
+
+    phone?: string;
+    address?: string;
+    profilePicture?: string;
+    coverImages?: string[];
+
+    gender: GenderEnum;
+    role: RoleEnum;
+    provider: ProviderEnum;
+
+    createdAt: Date;
+    updatedAt?: Date;
+}
+
+const userSchema = new Schema<IUser>({
+
+
+    firstName: {type:String, required: true, minlength: 2, maxlength: 25},
+    lastName: {type:String, required: true, minlength: 2, maxlength: 25},
+
+    email: {type:String, required: true, unique: true},
+    confirmEmailOtp: {type: String},
+    confirmedAt: {type: Date},
+
+    password: {type: String, required: function(){
+        return this.provider !== ProviderEnum.google
+    }},
+    resetPasswordOtp: {type: String},
+    changeCredentialsTime: {type: Date},
+
+    phone: {type: String},
+    address: {type: String},
+
+    profilePicture: {type: String},
+    coverImages: [String],
+    gender: {type: String, enum:GenderEnum, default: GenderEnum.male},
+    role: {type: String, enum:RoleEnum, default: RoleEnum.user},
+    provider: {type: String, enum:ProviderEnum, default: ProviderEnum.system},
+
 },{
     timestamps: true,
-    toObject: {virtuals:true},
-    toJSON: {virtuals:true}
+    toJSON: {virtuals: true},
+    toObject: {virtuals: true}
 });
 
+userSchema.virtual("username")
+.set(function (value: string) {
+    const [firstName, lastName] = value.split(" ") || [];
+    this.set({firstName, lastName});
+})
+.get(function() {
+    return this.firstName + " " + this.lastName;
+});
 
-export const UserModel = mongoose.models.user || mongoose.model("user",userSchema);
-
-UserModel.syncIndexes();
+export const UserModel = models.User || model<IUser>("User",userSchema);
+export type HUserDocument = HydratedDocument<IUser>;

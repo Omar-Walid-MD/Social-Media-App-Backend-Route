@@ -1,19 +1,33 @@
-import nodemailer from "nodemailer";
+import {createTransport, Transporter } from "nodemailer";
+import Mail from "nodemailer/lib/mailer";
+import SMTPTransport from "nodemailer/lib/smtp-transport";
+import { BadRequestException } from "../response/error.response";
 
-export async function sendEmail({ from = process.env.EMAIL_USER, to="", cc="", bcc="", text="", html="", subject="Saraha App", attachments=[] } = {})
+export const sendEmail = async(data: Mail.Options): Promise<void> =>
 {
-	const transporter = nodemailer.createTransport({
+
+	if(!data.html && !data.attachments?.length && !data.text)
+	{
+		throw new BadRequestException("Missing Email content");
+	}
+
+	const transporter:
+	Transporter<
+		SMTPTransport.SentMessageInfo,
+		SMTPTransport.Options
+	>
+	= createTransport({
 		host: process.env.EMAIL_HOST,
 		port: 587,
 		secure: false,
 		auth: {
-			user: process.env.EMAIL_USER,
-			pass: process.env.EMAIL_PASS,
+			user: process.env.EMAIL_USER as string,
+			pass: process.env.EMAIL_PASS as string,
 		},
 	});
 
 	await transporter.sendMail({
-		from: `Social Media App <${from}>`,
-		to, cc, bcc, text, html, subject, attachments
+		...data,
+		from: `${process.env.APPLICATION_NAME} <${process.env.EMAIL_USER as string}>`,
 	});
 }
