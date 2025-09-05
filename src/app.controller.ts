@@ -12,8 +12,13 @@ config({
 
 import authController from "./modules/auth/auth.controller";
 import userController from "./modules/user/user.controller";
-import { globalErrorHandling } from "./utils/response/error.response";
+import { BadRequestException, globalErrorHandling } from "./utils/response/error.response";
 import connectDB from "./db/connection.db";
+import { createGetPresignedLink, getFile } from "./utils/multer/s3.config";
+import { promisify } from "node:util";
+import { pipeline } from "node:stream";
+
+const createS3WriteStreamPipe = promisify(pipeline);
 
 const limiter = rateLimit({
     windowMs: 60 * 60000,
@@ -37,6 +42,47 @@ const bootstrap = async (): Promise<void> => {
     //modules
     app.use("/auth",authController);
     app.use("/user",userController);
+
+    app.get("/upload/*path",async (req: Request, res: Response): Promise<void>=>{
+        const {downloadName, download = "false"} = req.query as {
+            downloadName?: string;
+            download?: string;
+        };
+        const {path} = req.params as unknown as {path:string[]}; 
+        const Key = path.join("/");
+
+        const s3Response = await getFile({Key});
+
+        if(!s3Response?.Body) throw new BadRequestException("Failed to fetch this asset");
+
+        res.setHeader("Content-type",`${s3Response.ContentType || "application/octet-stream"}`);
+        
+        if(download === "true")
+        {
+            res.setHeader("Content-Disposition", `attachment; filename="${downloadName || Key.split("/").pop()}"`); // only apply it for  download
+        }
+        
+        return await createS3WriteStreamPipe(s3Response.Body as NodeJS.ReadableStream, res);
+    });
+
+    app.get("/upload/pre-signed/*path",async (req: Request, res: Response): Promise<Response>=>{
+        const {downloadName, download = "false", expiresIn=120} = req.query as {
+            downloadName?: string;
+            download?: string;
+            expiresIn?: number;
+        };
+        const {path} = req.params as unknown as {path:string[]}; 
+        const Key = path.join("/");
+
+        const url = await createGetPresignedLink({
+            Key,
+            downloadName: downloadName as string,
+            download,
+            expiresIn
+        });
+    
+        return res.json({message:"Done",data:{url}})
+    });
 
     app.use("{/*dummy}",(req:Request,res:Response)=>{
         return res.status(404).json({message:"Invalid Routing"});

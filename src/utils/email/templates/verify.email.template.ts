@@ -39,7 +39,7 @@ export const verifyEmailTemplate = ({otp,title}: {otp: number; title: string;}):
     <div class="container">
         <h2>${title}</h2>
         <p>Hello,</p>
-        <p>Use the following code to verify your email address:</p>
+        <p>Use the following code:</p>
         <div class="otp-code">${otp}</div> <!-- Replace this with your OTP dynamically -->
         <p>This code is valid for 2 minutes. Please do not share it with anyone.</p>
         <p>If you did not request this, you can safely ignore this email.</p>

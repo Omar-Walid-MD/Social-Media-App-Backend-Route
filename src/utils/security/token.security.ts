@@ -6,6 +6,7 @@ import { BadRequestException, UnauthorizedException } from "../response/error.re
 import { UserRepository } from "../../db/repository/user.repository";
 import { HTokenDocument, TokenModel } from "../../db/models/Token.model";
 import { TokenRepository } from "../../db/repository/token.repository";
+import { Types } from "mongoose";
 
 
 export enum SignatureLevelEnum {
@@ -151,9 +152,10 @@ export const decodeToken = async({
         throw new UnauthorizedException("Invalid or old login credentials");
     }
 
+
     const user = await userModel.findOne({
         filter: {
-            id: decoded._id
+            _id: decoded._id as Types.ObjectId
         }
     });
 
@@ -162,7 +164,7 @@ export const decodeToken = async({
         throw new BadRequestException("Not Registered Account")
     }
 
-    if(user.changeCredentialsTime?.getTime() || 0 > (decoded.iat || 0)*1000)
+    if((user.changeCredentialsTime?.getTime() || 0) > (decoded.iat || 0)*1000)
     {
         throw new UnauthorizedException("Invalid or old login credentials");
     }

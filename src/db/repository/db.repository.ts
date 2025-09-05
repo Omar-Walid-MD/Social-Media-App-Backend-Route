@@ -1,4 +1,4 @@
-import { CreateOptions, FlattenMaps, HydratedDocument, Model, MongooseUpdateQueryOptions, PopulateOptions, ProjectionType, QueryOptions, RootFilterQuery, UpdateQuery, UpdateWriteOpResult } from "mongoose";
+import { CreateOptions, DeleteResult, FlattenMaps, HydratedDocument, Model, MongooseUpdateQueryOptions, PopulateOptions, ProjectionType, QueryOptions, RootFilterQuery, Types, UpdateQuery, UpdateWriteOpResult } from "mongoose";
 
 export type Lean<T> = HydratedDocument<FlattenMaps<T>>;
 
@@ -54,6 +54,35 @@ export abstract class DatabaseRepository<TDocument> {
         { ...update, $inc: {__v:1} },
         options); 
     }
+
+    async deleteOne({
+        filter
+    }: {
+        filter: RootFilterQuery<TDocument>;
+
+    }): Promise<DeleteResult>
+    {
+       return await this.model.deleteOne(filter); 
+    }
+
+    async findByIdAndUpdate({
+        id,
+        update,
+        options
+
+    }: {
+        id: Types.ObjectId;
+        update: UpdateQuery<TDocument>;
+        options?: QueryOptions<TDocument> | null;
+
+    }): Promise<HydratedDocument<TDocument> | Lean<TDocument> | null>
+    {
+       return await this.model.findByIdAndUpdate(id,
+        { ...update, $inc: {__v:1} },
+        options); 
+    }
+
+    
 
 
 }

@@ -8,6 +8,8 @@ import { IConfirmEmailBodyInputsDTO, IForgotCodeBodyInputsDTO, IGmail, ILoginBod
 import { UserRepository } from "../../db/repository/user.repository";
 import { generateNumberOtp } from "../../utils/otp";
 import {OAuth2Client, TokenPayload} from "google-auth-library";
+import { successResponse } from "../../utils/response/success.response";
+import { ILoginResponse } from "./auth.entites";
 
 class AuthenticationService
 {
@@ -34,7 +36,7 @@ class AuthenticationService
 
         const otp = generateNumberOtp();
 
-        const user = await this.userModel.createUser({
+        await this.userModel.createUser({
             data: [{
                 username,
                 email,
@@ -48,7 +50,7 @@ class AuthenticationService
             otp
         })
 
-        return res.status(201).json({message: "Done",data: {user}});
+        return successResponse({res,statusCode:201});
     };
 
     login = async (req: Request,res: Response): Promise<Response> =>
@@ -58,7 +60,8 @@ class AuthenticationService
         const user = await this.userModel.findOne({
             filter: {
                 email,
-                provider: ProviderEnum.system
+                provider: ProviderEnum.system,
+                freezedAt: {$exists: false}
             }
         });
 
@@ -79,7 +82,7 @@ class AuthenticationService
 
         const credentials = await createLoginCredentials(user);
 
-        return res.json({message:"Done",data:{credentials}});
+        return successResponse<ILoginResponse>({res,data:{credentials}});
     };
 
     private async verifyGmailAccount(idToken: string): Promise<TokenPayload>
@@ -119,7 +122,7 @@ class AuthenticationService
 
         const credentials = await createLoginCredentials(user);
 
-        return res.status(201).json({message:"Done",data:{credentials}})
+        return successResponse<ILoginResponse>({res,data:{credentials}});
     }
 
     signupWithGmail = async (req: Request, res: Response): Promise<Response> => {
@@ -155,7 +158,7 @@ class AuthenticationService
 
         const credentials = await createLoginCredentials(newUser);
 
-        return res.status(201).json({message:"Done",data:{credentials}})
+        return successResponse<ILoginResponse>({res,statusCode:201,data:{credentials}});
     }
 
 
@@ -194,7 +197,7 @@ class AuthenticationService
 
         if(!updatedUser) throw new ApplicationException("Fail to confirm user email");
 
-        return res.status(201).json({message:"Done"});
+        return successResponse({res});
 
     };
 
@@ -222,7 +225,7 @@ class AuthenticationService
         await this.userModel.updateOne({
             filter: {email},
             update: {
-                confirmEmailOtp: generateHash(String(otp))
+                confirmEmailOtp: await generateHash(String(otp))
             }
         });
 
@@ -231,7 +234,7 @@ class AuthenticationService
             otp
         });
 
-        return res.status(201).json({message:"Re-sent OTP Email"});
+        return successResponse({res,statusCode:201});
 
     };
 
@@ -268,7 +271,8 @@ class AuthenticationService
 
         emailEvent.emit("sendResetPassword",{to:email,otp})
 
-        return res.json({message:"Done"});
+        return successResponse({res});
+
     };
 
     verifyForgotPasswordCode = async (req: Request,res: Response): Promise<Response> =>
@@ -294,9 +298,7 @@ class AuthenticationService
             throw new ConflictException("Invalid OTP");
         }
 
-
-
-        return res.json({message:"Done"});
+        return successResponse({res});
     };
 
     resetForgotPassword = async (req: Request,res: Response): Promise<Response> =>
@@ -336,9 +338,7 @@ class AuthenticationService
             throw new BadRequestException("Failed to reset password");
         }
 
-
-
-        return res.json({message:"Done"});
+        return successResponse({res});
     };
 
 
