@@ -10,8 +10,8 @@ config({
     path: resolve("./config/.env.dev")
 });
 
-import authController from "./modules/auth/auth.controller";
-import userController from "./modules/user/user.controller";
+import { authRouter, userRouter, postRouter } from "./modules";
+
 import { BadRequestException, globalErrorHandling } from "./utils/response/error.response";
 import connectDB from "./db/connection.db";
 import { createGetPresignedLink, getFile } from "./utils/multer/s3.config";
@@ -40,8 +40,9 @@ const bootstrap = async (): Promise<void> => {
     await connectDB();
 
     //modules
-    app.use("/auth",authController);
-    app.use("/user",userController);
+    app.use("/auth",authRouter);
+    app.use("/user",userRouter);
+    app.use("/post",postRouter);
 
     app.get("/upload/*path",async (req: Request, res: Response): Promise<void>=>{
         const {downloadName, download = "false"} = req.query as {

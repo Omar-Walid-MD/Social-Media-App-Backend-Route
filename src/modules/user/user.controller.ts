@@ -13,6 +13,12 @@ router.get("/",
     authentication(),
     userService.profile);
 
+router.patch("/",
+    authentication(),
+    validation(validators.updateBasicInfo),
+    userService.updateBasicInfo)
+
+
 router.patch("/profile-image",
     authentication(),
     userService.profileImage);
@@ -48,5 +54,32 @@ router.delete("/:userId",
     authorization(endpoint.deleteAccount),
     validation(validators.restoreAccount),
     userService.deleteAccount);
+
+router.patch("/send-update-password",
+    authentication(),
+    validation(validators.sendUpdatePasswordCode),
+    userService.sendUpdatePasswordCode);
+
+router.patch("/verify-update-password",
+    authentication(),
+    validation(validators.verifyUpdatePassword),
+    userService.verifyUpdatePasswordCode);
+
+router.patch("/update-password",
+    authentication(),
+    validation(validators.updatePassword),
+    userService.updatePassword);
+
+router.patch("/send-update-email",
+    authentication(),
+    validation(validators.sendUpdateEmail),
+    userService.sendUpdateEmail);
+
+router.patch("/update-email",
+    authentication(),
+    validation(validators.updateEmail),
+    userService.updateEmail);
+
+
 
 export default router;

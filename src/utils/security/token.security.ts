@@ -3,10 +3,9 @@ import type { JwtPayload, Secret, SignOptions } from "jsonwebtoken";
 import { sign, verify } from "jsonwebtoken";
 import { HUserDocument, RoleEnum, UserModel } from "../../db/models/User.model";
 import { BadRequestException, UnauthorizedException } from "../response/error.response";
-import { UserRepository } from "../../db/repository/user.repository";
 import { HTokenDocument, TokenModel } from "../../db/models/Token.model";
-import { TokenRepository } from "../../db/repository/token.repository";
 import { Types } from "mongoose";
+import { UserRepository, TokenRepository } from "../../db/repository";
 
 
 export enum SignatureLevelEnum {

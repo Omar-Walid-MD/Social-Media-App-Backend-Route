@@ -5,11 +5,11 @@ import { compareHash, generateHash } from "../../utils/security/hash.security";
 import { emailEvent } from "../../utils/event/email.events";
 import { createLoginCredentials } from "../../utils/security/token.security";
 import { IConfirmEmailBodyInputsDTO, IForgotCodeBodyInputsDTO, IGmail, ILoginBodyInputsDTO, IResetForgotCodeBodyInputsDTO, ISignUpBodyInputsDTO, IVerifyForgotCodeBodyInputsDTO } from "./auth.dto";
-import { UserRepository } from "../../db/repository/user.repository";
 import { generateNumberOtp } from "../../utils/otp";
 import {OAuth2Client, TokenPayload} from "google-auth-library";
 import { successResponse } from "../../utils/response/success.response";
 import { ILoginResponse } from "./auth.entites";
+import { UserRepository } from "../../db/repository";
 
 class AuthenticationService
 {
@@ -40,15 +40,10 @@ class AuthenticationService
             data: [{
                 username,
                 email,
-                password: await generateHash(password),
-                confirmEmailOtp: await generateHash(String(otp))
+                password,
+                confirmEmailOtp: `${otp}`
             }]
         });
-
-        emailEvent.emit("confirmEmail",{
-            to: email,
-            otp
-        })
 
         return successResponse({res,statusCode:201});
     };
@@ -80,9 +75,74 @@ class AuthenticationService
             throw new NotFoundException("Invalid Login data");
         }
 
-        const credentials = await createLoginCredentials(user);
+        if(user.twoStepVerification)
+        {
+            const otp = generateNumberOtp();
+            await this.userModel.updateOne({
+                filter: {email},
+                update: {
+                    loginOtp: await generateHash(String(otp))
+                }
+            });
+            emailEvent.emit("confirmEmail",{
+                to: email,
+                otp
+            });
+            return successResponse({res,message:"Done. Sent Login Email"});
+        }
+        else
+        {
+            const credentials = await createLoginCredentials(user);
+            return successResponse<ILoginResponse>({res,data:{credentials}});
+        }
 
+    };
+
+    confirmLogin = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, password, otp} = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                freezedAt: {$exists: false}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid Login data");
+        }
+
+        if(!user.confirmedAt)
+        {
+            throw new BadRequestException("Please verify your account first");
+        }
+        
+        if(!await compareHash(password,user.password))
+        {
+            throw new NotFoundException("Invalid Login data");
+        }
+
+        if(user.twoStepVerification)
+        {
+            if(!await compareHash(otp,user.loginOtp || ""))
+            {
+                throw new NotFoundException("Invalid OTP");
+            }
+
+            await this.userModel.updateOne({
+                filter: {email},
+                update: {
+                    $unset: {loginOtp: true},
+                }
+            });
+        }
+
+        const credentials = await createLoginCredentials(user);
         return successResponse<ILoginResponse>({res,data:{credentials}});
+
     };
 
     private async verifyGmailAccount(idToken: string): Promise<TokenPayload>
@@ -337,6 +397,52 @@ class AuthenticationService
         {
             throw new BadRequestException("Failed to reset password");
         }
+
+        return successResponse({res});
+    };
+
+    sendEnableVerification = async (req: Request,res: Response): Promise<Response> =>
+    {
+        if(req.user?.twoStepVerification) throw new BadRequestException("2 Step Verification Already enabled");
+
+        const otp = generateNumberOtp();
+
+        const result = await this.userModel.updateOne({
+            filter: {email: req.user?.email},
+            update: {
+                enableVerificationOtp: await generateHash(String(otp))
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to send code. Please try again later");
+        }
+
+        emailEvent.emit("sendEnableVerification",{to:req.user?.email,otp})
+
+        return successResponse({res});
+
+    };
+
+    enableVerification = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { otp } = req.body;
+
+        if(req.user?.twoStepVerification) throw new NotFoundException("2 Step Verification Already enabled");
+
+        if(!await compareHash(otp, req.user?.enableVerificationOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+        await this.userModel.updateOne({
+            filter: {_id: req.user?._id},
+            update: {
+                $unset: {enableVerificationOtp: true},
+                twoStepVerification: true
+            }
+        });
 
         return successResponse({res});
     };

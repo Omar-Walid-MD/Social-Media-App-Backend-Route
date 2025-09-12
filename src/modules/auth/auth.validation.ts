@@ -48,11 +48,7 @@ export const signupWithGmail = {
     })
 } 
 
-export const sendForgotPasswordCode = {
-    body: z.strictObject({
-        email: generalFields.email,
-    })
-}
+export const sendForgotPasswordCode = resendConfirmEmail;
 
 export const verifyForgotPassword = {
     body: sendForgotPasswordCode.body.extend({
@@ -67,4 +63,16 @@ export const resetForgotPassword = {
     }).refine((data)=>{
         return data.password === data.confirmPassword;
     },{message:"Password mistmatch confirmPassword",path:["confirmPassword"]})
+}
+
+export const enableVerification = {
+    body: z.strictObject({
+        otp: generalFields.otp,
+    })
+}
+
+export const confirmLogin = {
+    body: login.body.extend({
+        otp: generalFields.otp
+    })
 }

@@ -1,17 +1,20 @@
 import type { Request, Response } from "express";
-import { HUserDocument, IUser, RoleEnum, UserModel } from "../../db/models/User.model";
+import { HUserDocument, IUser, ProviderEnum, RoleEnum, UserModel } from "../../db/models/User.model";
 import { UserRepository } from "../../db/repository/user.repository";
-import { IDeleteAccountInputsDTO, IFreezeAccountInputsDTO, ILogoutBodyInputsDTO, IRestoreAccountInputsDTO } from "./user.dto";
+import { IDeleteAccountInputsDTO, IFreezeAccountInputsDTO, ILogoutBodyInputsDTO, IRestoreAccountInputsDTO, ISendUpdateCodeBodyInputsDTO, ISendUpdateEmailBodyInputsDTO, IUpdateEmailBodyInputsDTO, IUpdateInfoBodyInputsDTO, IUpdatePasswordBodyInputsDTO, IVerifyUpdateCodeBodyInputsDTO } from "./user.dto";
 import { createLoginCredentials, createRevokeToken, LogoutEnum } from "../../utils/security/token.security";
 import { Types, UpdateQuery } from "mongoose";
 import { JwtPayload } from "jsonwebtoken";
 import { createPresignedUploadLink, deleteFiles, deleteFolderByPrefix, uploadFiles } from "../../utils/multer/s3.config";
 import { StorageEnum } from "../../utils/multer/cloud.multer";
-import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from "../../utils/response/error.response";
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from "../../utils/response/error.response";
 import { s3Event } from "../../utils/multer/s3.events";
 import { successResponse } from "../../utils/response/success.response";
 import { IProfileImageResponse, IUserResponse } from "./user.entities";
 import { ILoginResponse } from "../auth/auth.entites";
+import { generateNumberOtp } from "../../utils/otp";
+import { compareHash, generateHash } from "../../utils/security/hash.security";
+import { emailEvent } from "../../utils/event/email.events";
 
 class UserService
 {
@@ -86,6 +89,28 @@ class UserService
         return successResponse<IUserResponse>({res,data:{user}});
     }
 
+    updateBasicInfo = async(req: Request, res: Response): Promise<Response> => {
+
+        const {firstName, lastName, gender, phone} = req.body as IUpdateInfoBodyInputsDTO;
+
+        const user = await this.userModel.findOneAndUpdate({
+            filter: {_id: req.user?._id as Types.ObjectId},
+            update: {
+                firstName,
+                lastName,
+                gender,
+                phone
+            },
+            options: {
+                new: true
+            }
+        });
+
+        if(!user) throw new NotFoundException("User not found");
+
+        return successResponse({res,data:{user}});
+    }
+
     logout = async(req: Request, res: Response): Promise<Response> => {
 
         const {flag}: ILogoutBodyInputsDTO = req.body;
@@ -130,7 +155,6 @@ class UserService
             data: {credentials}
         });
     }
-
 
     freezeAccount = async(req: Request, res:Response): Promise<Response> => {
 
@@ -206,8 +230,213 @@ class UserService
 
         return successResponse({res});
     }
+
+
+    sendUpdatePasswordCode = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, password } = req.body as ISendUpdateCodeBodyInputsDTO;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(password, user.password as string))
+        {
+            throw new ConflictException("Incorrect password");
+        }
+
+        const otp = generateNumberOtp();
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                resetPasswordOtp: await generateHash(String(otp))
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to send reset code. Please try again later");
+        }
+
+        emailEvent.emit("sendResetPassword",{to:email,otp})
+
+        return successResponse({res});
+
+    };
+
+    verifyUpdatePasswordCode = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, otp } = req.body as IVerifyUpdateCodeBodyInputsDTO;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true},
+                resetPasswordOtp: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(otp, user.resetPasswordOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+        return successResponse({res});
+    };
+
+    updatePassword = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, otp, password, oldPassword }: IUpdatePasswordBodyInputsDTO = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true},
+                resetPasswordOtp: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(otp, user.resetPasswordOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+        if(!await compareHash(oldPassword, user.password as string))
+        {
+            throw new ConflictException("Incorrect old password");
+        }
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                $unset: {resetPasswordOtp: true},
+                changeCredentialsTime: new Date(),
+                password: await generateHash(password)
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to update password");
+        }
+
+        return successResponse({res});
+    };
     
 
+    sendUpdateEmail = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, newEmail, password } = req.body as ISendUpdateEmailBodyInputsDTO;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(password, user.password as string))
+        {
+            throw new ConflictException("Incorrect password");
+        }
+
+        if(await this.userModel.findOne({filter:{email:newEmail}}))
+        {
+            throw new ConflictException("Email already exists");
+        }
+
+        const otp = generateNumberOtp();
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                updateEmailOtp: await generateHash(String(otp))
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to send reset code. Please try again later");
+        }
+
+        emailEvent.emit("confirmEmail",{to:newEmail,otp})
+
+        return successResponse({res});
+    };
+
+
+    updateEmail = async (req: Request,res: Response): Promise<Response> =>
+    {
+        const { email, newEmail, otp, password }: IUpdateEmailBodyInputsDTO = req.body;
+    
+        const user = await this.userModel.findOne({
+            filter: {
+                email,
+                provider: ProviderEnum.system,
+                confirmedAt: {$exists: true},
+                updateEmailOtp: {$exists: true}
+            }
+        });
+
+        if(!user)
+        {
+            throw new NotFoundException("Invalid account");
+        }
+
+        if(!await compareHash(otp, user.updateEmailOtp as string))
+        {
+            throw new ConflictException("Invalid OTP");
+        }
+
+        if(!await compareHash(password, user.password as string))
+        {
+            throw new ConflictException("Incorrect password");
+        }
+
+        const result = await this.userModel.updateOne({
+            filter: {email},
+            update: {
+                $unset: {updateEmailOtp: true},
+                changeCredentialsTime: new Date(),
+                email: newEmail
+            }
+        });
+
+        if(!result.matchedCount)
+        {
+            throw new BadRequestException("Failed to update email");
+        }
+
+        return successResponse({res});
+    };
 
 }
 
