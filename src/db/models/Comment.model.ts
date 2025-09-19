@@ -1,40 +1,21 @@
 import { HydratedDocument, model, models, Schema, Types } from "mongoose";
 import { emailEvent } from "../../utils/event/email.events";
-import { deleteFolderByPrefix } from "../../utils/multer/s3.config";
+import { IPost } from "./Post.model";
 import { CommentRepository } from "../repository";
-import { CommentModel } from "./Comment.model";
+import { deleteFiles } from "../../utils/multer/s3.config";
 
-export enum AllowCommentsEnum
-{
-    allow="allow",
-    deny="deny"
-}
 
-export enum AvailabilityEnum
-{
-    public="public",
-    friends="friends",
-    onlyMe="only-me"
-}
+export interface IComment {
+    createdBy: Types.ObjectId;
+    postId: Types.ObjectId | Partial<IPost>;
+    commentId?: Types.ObjectId;
 
-export enum LikeActionNum
-{
-    like="like",
-    unlike="unlike"
-}
-
-export interface IPost {
     content?: string;
     attachments?: string[];
-    assetsFolderId: string;
-    
-    allowComments: AllowCommentsEnum;
-    availability: AvailabilityEnum;
     
     likes?: Types.ObjectId[];
     tags?: Types.ObjectId[];
 
-    createdBy: Types.ObjectId;
     except?: Types.ObjectId[];
     only?: Types.ObjectId[];
 
@@ -49,10 +30,10 @@ export interface IPost {
 }
 
 
-export type HPostDocument = HydratedDocument<IPost>;
+export type HCommentDocument = HydratedDocument<IComment>;
 
 
-const postSchema = new Schema<IPost>({
+const commentSchema = new Schema<IComment>({
 
     content: {
         type: String,
@@ -64,13 +45,6 @@ const postSchema = new Schema<IPost>({
         }
     },
     attachments: [String],
-    assetsFolderId: {
-        type: String,
-        required: true
-    },
-    
-    allowComments: {type:String, enum:AllowCommentsEnum, default: AllowCommentsEnum.allow},
-    availability: {type:String, enum:AvailabilityEnum, default: AvailabilityEnum.public},
     
     likes: [{type: Schema.Types.ObjectId, ref: "User"}],
     tags: [{type: Schema.Types.ObjectId, ref: "User"}],
@@ -78,6 +52,9 @@ const postSchema = new Schema<IPost>({
     createdBy: {type: Schema.Types.ObjectId, ref: "User", required: true},
     except: [{type: Schema.Types.ObjectId, ref: "User"}],
     only: [{type: Schema.Types.ObjectId, ref: "User"}],
+
+    postId: {type: Schema.Types.ObjectId, ref: "Post", required: true},
+    commentId: {type: Schema.Types.ObjectId, ref: "Comment"},
 
     freezedBy: {type: Schema.Types.ObjectId, ref: "User"},
     freezedAt: Date,
@@ -92,14 +69,14 @@ const postSchema = new Schema<IPost>({
     toJSON: {virtuals:true}
 });
 
-postSchema.virtual("comments",{
-    localField:"_id",
-    foreignField: "postId",
+commentSchema.virtual("replies",{
+    localField: "_id",
+    foreignField: "commentId",
     ref: "Comment",
     justOne: true
 });
 
-postSchema.pre(["findOne","find","countDocuments"],function(next)
+commentSchema.pre(["findOne","find","countDocuments"],function(next)
 {
     const query = this.getQuery();
     if(query.paranoid === false)
@@ -114,7 +91,7 @@ postSchema.pre(["findOne","find","countDocuments"],function(next)
     next();
 });
 
-postSchema.pre(["findOneAndUpdate","updateOne"],function(next)
+commentSchema.pre(["findOneAndUpdate","updateOne"],function(next)
 {
     const query = this.getQuery();
     if(query.paranoid === false)
@@ -130,7 +107,7 @@ postSchema.pre(["findOneAndUpdate","updateOne"],function(next)
 });
 
 
-postSchema.post("save",async function(doc: HPostDocument, next)
+commentSchema.post("save",async function(doc: HCommentDocument, next)
 {
     if(doc.tags?.length)
     {
@@ -142,7 +119,7 @@ postSchema.post("save",async function(doc: HPostDocument, next)
             {
                 emailEvent.emit("sendTagEmail",{
                     to: taggedUser.email,
-                    post: populatedDoc,
+                    Comment: populatedDoc,
                     user: taggedUser
                 });
             }
@@ -151,26 +128,24 @@ postSchema.post("save",async function(doc: HPostDocument, next)
     next();
 });
 
-postSchema.post("findOneAndDelete",async function(doc: HPostDocument, next)
+commentSchema.post("findOneAndDelete",async function(doc: HCommentDocument, next)
 {
     if(doc)
     {
+        const commentModel = new CommentRepository(CommentModel);
+    
+        await commentModel.deleteMany({
+            filter: {commentId: doc._id}
+        });
+    
         if(doc?.attachments?.length)
         {
-            await deleteFolderByPrefix({path: `/users/${doc.createdBy}/${doc.assetsFolderId}`});
+            await deleteFiles({urls: doc.attachments});
         }
-
-        const commentModel = new CommentRepository(CommentModel);
-
-        // delete all comments under deleted post
-        await commentModel.deleteMany({
-            filter: {postId: doc._id}
-        });
     }
 
     next();
 });
 
 
-
-export const PostModel = models.Post || model<IPost>("Post",postSchema);
+export const CommentModel = models.Comment || model<IComment>("Comment",commentSchema);

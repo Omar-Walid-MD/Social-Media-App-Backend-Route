@@ -1,16 +1,15 @@
 import {z} from "zod";
-import { AllowCommentsEnum, AvailabilityEnum, LikeActionNum } from "../../db/models/Post.model";
 import { generalFields } from "../../middleware/validation.middleware";
 import { fileValidation } from "../../utils/multer/cloud.multer";
 import { Types } from "mongoose";
 
-export const createPost = {
+export const createComment = {
+    params: z.strictObject({
+        postId: generalFields.id
+    }),
     body: z.strictObject({
         content: z.string().min(2).max(500000).optional(),
         attachments: z.array(generalFields.file(fileValidation.image)).max(2).optional(),
-        allowComments: z.enum(AllowCommentsEnum).default(AllowCommentsEnum.allow),
-        availability: z.enum(AvailabilityEnum).default(AvailabilityEnum.public),
-
         tags: z.array(generalFields.id).max(10).optional(),
     }).superRefine((data,ctx)=>{
 
@@ -34,14 +33,18 @@ export const createPost = {
     })
 }
 
-export const updatePost = {
-    params: z.strictObject({
-        postId: generalFields.id
+export const replyToComment = {
+    params: createComment.params.extend({
+        commentId: generalFields.id
     }),
+    body: createComment.body
+    
+}
+
+export const updateComment = {
+    params: replyToComment.params,
     body: z.strictObject({
         content: z.string().min(2).max(500000).optional(),
-        allowComments: z.enum(AllowCommentsEnum).optional(),
-        availability: z.enum(AvailabilityEnum).optional(),
 
         attachments: z.array(generalFields.file(fileValidation.image)).max(2).optional(),
         removedAttachments: z.array(z.string()).max(2).optional(),
@@ -79,34 +82,26 @@ export const updatePost = {
     })
 }
 
-export const likePost = {
-    params: z.strictObject({
-        postId: generalFields.id
-    }),
-    query: z.strictObject({
-        action: z.enum(LikeActionNum).default(LikeActionNum.like)
-    })
-}
 
-export const freezePost = {
+export const freezeComment = {
     params: z.object({
-        postId: z.string()
+        commentId: z.string()
     }).refine(data=>{
 
-        return Types.ObjectId.isValid(data?.postId || "");
+        return Types.ObjectId.isValid(data?.commentId || "");
 
-    },{error:"Invalid ObjectId format",path:["postId"]})
+    },{error:"Invalid ObjectId format",path:["commentId"]})
 }
 
-export const restorePost = {
+export const restoreComment = {
     params: z.object({
-        postId: z.string()
+        commentId: z.string()
     }).refine(data=>{
 
-        return Types.ObjectId.isValid(data.postId);
+        return Types.ObjectId.isValid(data.commentId);
 
-    },{error:"Invalid ObjectId format",path:["postId"]})
+    },{error:"Invalid ObjectId format",path:["commentId"]})
 }
 
-export const deletePost = restorePost;
-export const getPost = restorePost;
+export const deleteComment = restoreComment;
+export const getComment = restoreComment;

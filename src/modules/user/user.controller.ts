@@ -13,11 +13,51 @@ router.get("/",
     authentication(),
     userService.profile);
 
+router.get("/dashboard",
+    authorization(endpoint.dashboard),
+    userService.dashboard
+)
+
+router.patch("/:userId/change-role",
+    authorization(endpoint.changeRole),
+    validation(validators.changeRole),
+    userService.changeRole
+)
+
+router.post("/:userId/send-friend-request",
+    authentication(),
+    validation(validators.sendFriendRequest),
+    userService.sendFriendRequest
+)
+
+router.patch("/accept-friend-request/:requestId",
+    authentication(),
+    validation(validators.acceptFriendRequest),
+    userService.acceptFriendRequest
+)
+
+router.delete("/delete-friend-request/:requestId",
+    authentication(),
+    validation(validators.deleteFriendRequest),
+    userService.deleteFriendRequest
+)
+
+router.patch("/:userId/unfriend",
+    authentication(),
+    validation(validators.unfriendUser),
+    userService.unfriendUser
+)
+
+router.patch("/:userId/block",
+    authentication(),
+    validation(validators.blockUser),
+    userService.blockUser
+)
+
 router.patch("/",
     authentication(),
     validation(validators.updateBasicInfo),
     userService.updateBasicInfo)
-
 
 router.patch("/profile-image",
     authentication(),

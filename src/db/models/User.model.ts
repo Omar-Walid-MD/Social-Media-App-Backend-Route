@@ -8,7 +8,8 @@ export enum GenderEnum {
 
 export enum RoleEnum {
     user="user",
-    admin="admin"
+    admin="admin",
+    superAdmin="super-admin"
 }
 
 export enum ProviderEnum {
@@ -54,6 +55,9 @@ export interface IUser {
 
     restoredAt?: Date;
     restoredBy?: Schema.Types.ObjectId;
+
+    friends?: Schema.Types.ObjectId[];
+    blocked?: Schema.Types.ObjectId[];
 }
 
 const userSchema = new Schema<IUser>({
@@ -95,6 +99,8 @@ const userSchema = new Schema<IUser>({
     restoredAt: {type: Date},
     restoredBy: {type: Schema.Types.ObjectId, ref: "User"},
 
+    friends: [{type: Schema.Types.ObjectId, ref: "User"}],
+    blocked: [{type: Schema.Types.ObjectId, ref: "User"}]
 
 },{
     timestamps: true,
@@ -139,32 +145,5 @@ userSchema.pre(["findOneAndUpdate","updateOne"], async function(next)
     }
 });
 
-// userSchema.post(["findOneAndUpdate","updateOne"], async function(next)
-// {
-//     const query = this.getQuery();
-//     const update = this.getUpdate() as UpdateQuery<HUserDocument>;
-
-//     if(update["$set"].changeCredentialsTime)
-//     {
-//         const tokenModel = new TokenRepository(TokenModel);
-//         await tokenModel.deleteMany({filter:{userId:query._id}});
-//     }
-// });
-
-// userSchema.post(["deleteOne", "findOneAndDelete"],async function(doc, next)
-// {
-//     const query = this.getQuery();
-//     console.log(this);
-//     const tokenModel = new TokenRepository(TokenModel);
-//     await tokenModel.deleteMany({filter:{userId:query._id}});
-// });
-
-// userSchema.pre("insertMany",async function(next,docs)
-// {
-//     console.log(this,docs);
-//     for (const doc of docs) {
-//         doc.password = await generateHash(doc.password);
-//     }
-// })
 
 export const UserModel = models.User || model<IUser>("User",userSchema);

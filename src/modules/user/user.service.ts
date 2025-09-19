@@ -3,7 +3,7 @@ import { HUserDocument, IUser, ProviderEnum, RoleEnum, UserModel } from "../../d
 import { UserRepository } from "../../db/repository/user.repository";
 import { IDeleteAccountInputsDTO, IFreezeAccountInputsDTO, ILogoutBodyInputsDTO, IRestoreAccountInputsDTO, ISendUpdateCodeBodyInputsDTO, ISendUpdateEmailBodyInputsDTO, IUpdateEmailBodyInputsDTO, IUpdateInfoBodyInputsDTO, IUpdatePasswordBodyInputsDTO, IVerifyUpdateCodeBodyInputsDTO } from "./user.dto";
 import { createLoginCredentials, createRevokeToken, LogoutEnum } from "../../utils/security/token.security";
-import { Types, UpdateQuery } from "mongoose";
+import { Schema, Types, UpdateQuery } from "mongoose";
 import { JwtPayload } from "jsonwebtoken";
 import { createPresignedUploadLink, deleteFiles, deleteFolderByPrefix, uploadFiles } from "../../utils/multer/s3.config";
 import { StorageEnum } from "../../utils/multer/cloud.multer";
@@ -15,24 +15,274 @@ import { ILoginResponse } from "../auth/auth.entites";
 import { generateNumberOtp } from "../../utils/otp";
 import { compareHash, generateHash } from "../../utils/security/hash.security";
 import { emailEvent } from "../../utils/event/email.events";
+import { CommentRepository, FriendRequestRepository, PostRepository } from "../../db/repository";
+import { PostModel } from "../../db/models/Post.model";
+import { FriendRequestModel } from "../../db/models/FriendRequest.model";
+import { CommentModel } from "../../db/models/Comment.model";
 
 class UserService
 {
     private userModel = new UserRepository(UserModel);
+    private postModel = new PostRepository(PostModel);
+    private friendRequestModel = new FriendRequestRepository(FriendRequestModel);
+    private commentModel = new CommentRepository(CommentModel);
 
     constructor() {}
 
     profile = async(req: Request, res: Response): Promise<Response> => {
 
-        if(!req.user) throw new UnauthorizedException("Missing user details");
+        const profile = await this.userModel.findById(
+        {
+            id: req.user?._id as Types.ObjectId,
+            options: {
+                populate: [{
+                    path: "friends",
+                    select: "firstName lastName email gender profilePicture"
+                }]
+            }
+        });
 
-        return successResponse<IUserResponse>({
+        if(!profile) throw new NotFoundException("Failed to find user profile");
+
+        return successResponse({
             res,
             statusCode: 201,
-            data: {user: req.user}
+            data: {profile}
         });
         
     }
+
+    dashboard = async(req: Request, res: Response): Promise<Response> => {
+
+        const result = await Promise.allSettled([
+            this.userModel.find({filter:{}}),
+            this.postModel.find({filter:{}})
+        ])
+
+        return successResponse({
+            res,
+            statusCode: 201,
+            data: { users: result[0], posts: result[1] }
+        });
+        
+    }
+
+    changeRole = async(req: Request, res: Response): Promise<Response> => {
+
+        const {userId} = req.params as unknown as {userId:Types.ObjectId};
+        const {role} = req.body as unknown as {role:RoleEnum};
+
+        if(userId === req.user?._id) throw new BadRequestException("Cannot change own role");
+
+        // can't change role of user with same role or super admin user
+        let denyRoles: RoleEnum[] = [role, RoleEnum.superAdmin];
+
+        // if logged in user is admin, cannot change role of another admin
+        if(req.user?.role === RoleEnum.admin)
+        {
+            denyRoles.push(RoleEnum.admin)
+        }
+
+        const user = await this.userModel.findOneAndUpdate({
+            filter: {
+                _id: userId,
+                role: {$nin: denyRoles}
+            },
+            update: {
+                role
+            }
+        });
+
+        if(!user) throw new NotFoundException("User not found");
+
+        return successResponse({
+            res,
+            statusCode: 201
+        });
+        
+    }
+
+    sendFriendRequest = async(req: Request, res: Response): Promise<Response> => {
+
+        const {userId} = req.params as unknown as {userId:Types.ObjectId};
+
+        if(userId as unknown as string === req.user?._id.toString()) throw new BadRequestException("Cannot send friend request to self");
+
+        if(userId)
+        {
+            const blocked = req.user?.blocked?.map((id)=>id.toString()) || [];
+            if(blocked?.includes(userId as unknown as string))
+            {
+                throw new ConflictException("User is blocked");
+            }
+        }
+
+        const checkFriendRequestExists = await this.friendRequestModel.findOne({
+            filter: {
+                createdBy: {$in: [req.user?._id,userId]},
+                sendTo: {$in: [req.user?._id,userId]},
+                acceptedAt: {$exists: false}
+            }
+        });
+
+        if(checkFriendRequestExists) throw new ConflictException("Friend Request already exists between users");
+        
+        const user = await this.userModel.findOne({
+            filter: {
+                _id: userId,
+                blocked: {$nin: req.user?._id}
+            }
+        });
+
+        if(!user) throw new NotFoundException("Invalid recipient");
+        
+
+        const [friendRequest] = await this.friendRequestModel.create({
+            data: [{
+                createdBy: req.user?._id as Types.ObjectId,
+                sentTo: userId,
+            }]
+        }) || [];
+
+        if(!friendRequest) throw new BadRequestException("Something went wrong");
+
+        return successResponse({res,statusCode:201});
+    }
+
+    acceptFriendRequest = async(req: Request, res: Response): Promise<Response> => {
+
+        const {requestId} = req.params as unknown as {requestId: Types.ObjectId};
+
+        const friendRequest = await this.friendRequestModel.findOneAndUpdate({
+            filter: {
+                _id: requestId,
+                sentTo: req.user?._id,
+                acceptedAt: {$exists:false}
+            },
+            update: {
+                acceptedAt: new Date()
+            }
+        });
+
+        if(!friendRequest) throw new NotFoundException("Failed to fetch matching request");
+
+        await Promise.all([
+            await this.userModel.updateOne({filter:{_id:friendRequest.createdBy},update:{$addToSet:{friends:friendRequest.sentTo}}}),
+            await this.userModel.updateOne({filter:{_id:friendRequest.sentTo},update:{$addToSet:{friends:friendRequest.createdBy}}})
+        ]);
+        
+        return successResponse({res,statusCode:201});
+    }
+
+    deleteFriendRequest = async(req: Request, res: Response): Promise<Response> => {
+
+        const {requestId} = req.params as unknown as {requestId: Types.ObjectId};
+
+        const friendRequest = await this.friendRequestModel.deleteOne({
+            filter: {
+                _id: requestId,
+                $or: [
+                    {sentTo: req.user?._id},
+                    {createdBy: req.user?._id}
+                ],
+                acceptedAt: {$exists:false}
+            }
+        });
+
+        if(!friendRequest?.deletedCount) throw new NotFoundException("Failed to delete friend request");
+
+        return successResponse({res});
+    }
+
+    unfriendUser = async(req: Request, res: Response): Promise<Response> => {
+
+        const {userId} = req.params as unknown as {userId:Types.ObjectId};
+
+        if(userId)
+        {
+            const friends = req.user?.friends?.map((id)=>id.toString()) || [];
+            if(!friends?.includes(userId as unknown as string))
+            {
+                throw new NotFoundException("User is invalid or not a friend");
+            }
+        }
+
+        const user = await this.userModel.findOne({
+            filter: {_id: userId}
+        });
+
+        if(!user) throw new NotFoundException("User is invalid or not a friend");
+
+        await Promise.allSettled([
+            this.userModel.updateOne({
+                filter: {_id: req.user?._id},
+                update: {
+                    $pull:{friends:userId}
+                }
+            }),
+            this.userModel.updateOne({
+                filter: {_id: userId},
+                update: {
+                    $pull:{friends:req.user?._id}
+                }
+            })
+        ]);
+
+        return successResponse({res,statusCode:201});
+    }
+
+    blockUser = async(req: Request, res: Response): Promise<Response> => {
+
+        const {userId} = req.params as unknown as {userId:Types.ObjectId};
+
+        if(userId)
+        {
+            const blocked = req.user?.blocked?.map((id)=>id.toString()) || [];
+            if(blocked?.includes(userId as unknown as string))
+            {
+                throw new ConflictException("User already blocked");
+            }
+        }
+
+        const user = await this.userModel.findOne({
+            filter: {_id: userId}
+        });
+
+        if(!user) throw new NotFoundException("Invalid user");
+
+        const wasFriend = req.user?.friends?.includes(new Schema.Types.ObjectId(userId as unknown as string));
+
+        if(wasFriend)
+        {
+            await Promise.allSettled([
+                this.userModel.updateOne({
+                    filter: {_id: req.user?._id},
+                    update: {
+                        $addToSet:{blocked:userId},
+                        $pull:{friends:userId}
+                    }
+                }),
+                this.userModel.updateOne({
+                    filter: {_id: userId},
+                    update: {
+                        $pull:{friends:req.user?._id}
+                    }
+                })
+            ]);
+        }
+        else
+        {
+            await this.userModel.updateOne({
+                filter: {_id: req.user?._id},
+                update: {
+                    $addToSet:{blocked:userId}
+                }
+            });
+        }
+
+        return successResponse({res,statusCode:201});
+    }
+    
 
     profileImage = async(req: Request, res: Response): Promise<Response> => {
 
@@ -226,6 +476,14 @@ class UserService
 
         await deleteFolderByPrefix({
             path: `users/${userId}`
+        });
+
+        await this.postModel.deleteMany({
+            filter: {createdBy: userId}
+        });
+
+        await this.commentModel.deleteMany({
+            filter: {createdBy: userId}
         });
 
         return successResponse({res});
