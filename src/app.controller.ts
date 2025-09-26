@@ -10,13 +10,14 @@ config({
     path: resolve("./config/.env.dev")
 });
 
-import { authRouter, userRouter, postRouter } from "./modules";
+import { authRouter, userRouter, postRouter, initializeIo } from "./modules";
 
 import { BadRequestException, globalErrorHandling } from "./utils/response/error.response";
 import connectDB from "./db/connection.db";
 import { createGetPresignedLink, getFile } from "./utils/multer/s3.config";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream";
+import { chatRouter } from "./modules/chat";
 
 const createS3WriteStreamPipe = promisify(pipeline);
 
@@ -43,6 +44,7 @@ const bootstrap = async (): Promise<void> => {
     app.use("/auth",authRouter);
     app.use("/user",userRouter);
     app.use("/post",postRouter);
+    app.use("/chat",chatRouter);
 
     app.get("/upload/*path",async (req: Request, res: Response): Promise<void>=>{
         const {downloadName, download = "false"} = req.query as {
@@ -93,9 +95,10 @@ const bootstrap = async (): Promise<void> => {
     app.use(globalErrorHandling);
 
     const port: number | string = process.env.PORT || 3000;
-    app.listen(port,()=>{
+    const httpServer = app.listen(port,()=>{
         console.log(`Server is listening at port: ${port}`)
-    })
+    });
+    initializeIo(httpServer);
 }
 
 export default bootstrap;

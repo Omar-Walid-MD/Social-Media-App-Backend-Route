@@ -1,3 +1,4 @@
+import { HChatDocument } from "../../db/models";
 import { HUserDocument } from "../../db/models/User.model";
 
 export interface IProfileImageResponse {
@@ -5,5 +6,6 @@ export interface IProfileImageResponse {
 }
 
 export interface IUserResponse {
-    user: Partial<HUserDocument>
+    user: Partial<HUserDocument>;
+    groups?: Partial<HChatDocument>[];
 }

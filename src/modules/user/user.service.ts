@@ -15,10 +15,11 @@ import { ILoginResponse } from "../auth/auth.entites";
 import { generateNumberOtp } from "../../utils/otp";
 import { compareHash, generateHash } from "../../utils/security/hash.security";
 import { emailEvent } from "../../utils/event/email.events";
-import { CommentRepository, FriendRequestRepository, PostRepository } from "../../db/repository";
+import { ChatRepository, CommentRepository, FriendRequestRepository, PostRepository } from "../../db/repository";
 import { PostModel } from "../../db/models/Post.model";
 import { FriendRequestModel } from "../../db/models/FriendRequest.model";
 import { CommentModel } from "../../db/models/Comment.model";
+import { ChatModel } from "../../db/models";
 
 class UserService
 {
@@ -26,6 +27,7 @@ class UserService
     private postModel = new PostRepository(PostModel);
     private friendRequestModel = new FriendRequestRepository(FriendRequestModel);
     private commentModel = new CommentRepository(CommentModel);
+    private chatModel = new ChatRepository(ChatModel);
 
     constructor() {}
 
@@ -44,10 +46,17 @@ class UserService
 
         if(!profile) throw new NotFoundException("Failed to find user profile");
 
-        return successResponse({
+        const groups = await this.chatModel.find({
+            filter: {
+                participants: {$in: req.user?._id as Types.ObjectId},
+                group: {$exists: true}
+            }
+        })
+
+        return successResponse<IUserResponse>({
             res,
             statusCode: 201,
-            data: {profile}
+            data: {user: profile, groups}
         });
         
     }

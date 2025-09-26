@@ -9,6 +9,7 @@ import {v4 as uuid} from "uuid";
 import { BadRequestException, NotFoundException } from "../../utils/response/error.response";
 import { IDeletePostInputsDTO, IFreezePostInputsDTO, IGetPostInputsDTO, ILikePostQueryInputsDTO, IRestorePostInputsDTO } from "./post.dto";
 import { Types, UpdateQuery } from "mongoose";
+import { connectedSockets, getIo } from "../gateway";
 
 export const postAvailability = (req: Request) =>
 {
@@ -122,6 +123,12 @@ class PostService
         });
 
         if(!post) throw new NotFoundException("Post does not exist");
+
+        if(action !== LikeActionNum.unlike)
+        {
+            const io = getIo();
+            io.to(connectedSockets.get(post.createdBy.toString() as string) as string[]).emit("likePost",{postId, userId: req.user?._id})
+        }
 
         return successResponse({res});
     }
